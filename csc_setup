@@ -101,7 +101,8 @@ main() {
 
   [ -f "$DEST/install.sh" ] || die "install.sh not found in ${DEST}."
   say "Running install…"
-  ( cd "$DEST" && ./install.sh )
+  # Forward args (e.g. --lean) through to install.sh.
+  ( cd "$DEST" && ./install.sh "$@" )
 
   # Keys are restored by now — move origin off the HTTPS clone URL onto SSH.
   switch_remote_to_ssh
