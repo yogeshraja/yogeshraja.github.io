@@ -1,0 +1,54 @@
+echo \" <<'POWERSHELL_SECTION' >/dev/null # " | Out-Null
+# =============================================================================
+# setup — ONE URL for a fresh machine, on both Unix and Windows.
+#
+#   Unix (bash/zsh/sh):   curl -fsSL https://yogeshraja.github.io/csc/setup | sh
+#   Windows (PowerShell): irm https://yogeshraja.github.io/csc/setup | iex
+#
+# This file is a POLYGLOT: the same bytes are valid in both POSIX sh and
+# PowerShell, and each interpreter runs only its own half. The mechanism is the
+# PolyShell idiom (https://github.com/llamasoft/polyshell):
+#
+#   • The first line is `echo "..." <<'POWERSHELL_SECTION' >/dev/null # ...`.
+#     - sh reads it as an `echo` whose output is discarded (`>/dev/null`) with a
+#       here-document that swallows every line up to `POWERSHELL_SECTION`, so sh
+#       skips the entire PowerShell block and resumes at the Bash section below.
+#     - PowerShell reads `echo "..."` (its echo = Write-Output, piped to
+#       Out-Null) and the trailing `# ` comments out the here-doc operator, so
+#       PowerShell falls through and runs the lines that follow.
+#
+# All it does is detect the shell and hand off to the matching per-OS installer
+# (install-unix.sh / install-windows.ps1), which does the real work. No secrets.
+# Overridable via env: BASE_URL (where the installer scripts are served from).
+# =============================================================================
+
+# ===== PowerShell section (PowerShell runs this; sh's here-doc swallows it) ===
+$ErrorActionPreference = 'Stop'
+$baseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { 'https://yogeshraja.github.io/csc' }
+Write-Host "> Detected PowerShell - fetching the Windows installer..." -ForegroundColor Blue
+# Piping `setup` to `iex` can't carry args, so this runs the default install;
+# for a lean install fetch install-windows.ps1 directly (see the README).
+Invoke-Expression (Invoke-RestMethod -Uri "$baseUrl/install-windows.ps1")
+# Stop PowerShell before it reaches the Bash section (which `<#…#>` also hides).
+exit $LASTEXITCODE
+<#
+POWERSHELL_SECTION
+
+# ===== Bash / POSIX sh section (sh runs this; PowerShell's block comment hides it)
+BASE_URL="${BASE_URL:-https://yogeshraja.github.io/csc}"
+
+_say() { printf '\033[1;34m> %s\033[0m\n' "$*"; }
+_die() { printf '\033[1;31mx %s\033[0m\n' "$*" >&2; exit 1; }
+
+_fetch() {
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1"
+  elif command -v wget >/dev/null 2>&1; then wget -qO- "$1"
+  else _die "Need curl or wget to download the installer script."; fi
+}
+
+_say "Detected a POSIX shell - fetching the Unix installer..."
+# Pipe the Unix installer into a fresh sh, forwarding any args ("$@", e.g.
+# --lean) so `... | sh -s -- --lean` works.
+_fetch "${BASE_URL}/install-unix.sh" | sh -s -- "$@"
+exit $?
+#>

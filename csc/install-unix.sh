@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# =============================================================================
+# install-unix.sh — one-command setup for a fresh macOS/Linux machine.
+#
+# Clones the (private) custom-shell-config repo and runs ./install.sh. Meant to
+# be hosted publicly (yogeshraja.github.io/csc) and run as:
+#
+#   bash <(curl -fsSL https://yogeshraja.github.io/csc/install-unix.sh)
+#
+# (Usually reached via the cross-OS entry point: curl …/csc/setup | sh.)
+#
+# Use the process-substitution form, NOT `curl … | bash`: piping feeds the
+# script to stdin, which breaks the interactive git auth prompt. `<(…)` keeps
+# your terminal on stdin so the prompt works.
+#
+# This script is PUBLIC — it holds no secrets. Access to the private repo comes
+# from git's own HTTPS prompt (username + a Personal Access Token), never from
+# anything baked in here.
+#
+# Overridable via env: REPO_OWNER, REPO_NAME, DEST.
+# =============================================================================
+set -euo pipefail
+
+REPO_OWNER="${REPO_OWNER:-yogeshraja}"
+REPO_NAME="${REPO_NAME:-.custom_shell_config}"
+DEST="${DEST:-$HOME/.custom_shell_config}"
+HTTPS_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+# SSH remote to hand off to once keys are restored. Uses the "${REPO_OWNER}"
+# host, which matches a personal SSH-config alias (keeps your personal key
+# separate from a work github.com host); override SSH_URL if yours differs.
+SSH_URL="${SSH_URL:-git@${REPO_OWNER}:${REPO_OWNER}/${REPO_NAME}.git}"
+
+say()  { printf '\033[1;34m▶ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
+die()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Ensure git is available (install it where we safely can).
+need_git() {
+  command -v git >/dev/null 2>&1 && return 0
+  say "git not found — attempting to install it…"
+  case "$OSTYPE" in
+    darwin*)
+      xcode-select --install 2>/dev/null || true
+      die "Accept the Xcode Command Line Tools install (a dialog may have opened), then re-run." ;;
+    linux*)
+      if   command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y git
+      elif command -v dnf     >/dev/null 2>&1; then sudo dnf install -y git
+      elif command -v yum     >/dev/null 2>&1; then sudo yum install -y git
+      elif command -v pacman  >/dev/null 2>&1; then sudo pacman -Sy --noconfirm git
+      else die "Could not auto-install git. Install it, then re-run."; fi ;;
+    *) die "Unsupported OS ($OSTYPE); install git manually, then re-run." ;;
+  esac
+}
+
+# Clone over HTTPS — git prompts for your username + a Personal Access Token.
+clone_with_https() {
+  say "Cloning over HTTPS — git will prompt for your username and a Personal Access Token…"
+  git clone --recursive "$HTTPS_URL" "$DEST"
+}
+
+# We clone over HTTPS (a fresh machine has no SSH key yet), so origin starts on
+# HTTPS and every pull/push would prompt for a PAT. install.sh restores your SSH
+# key from Bitwarden; once a personal key is present, point origin at SSH so the
+# key is used (SSH_URL uses the `yogeshraja` ssh-config alias → id_ecdsa_personal).
+# Only rewrites an HTTPS origin — an already-SSH (or other) origin is left as-is.
+switch_remote_to_ssh() {
+  local cur; cur="$(git -C "$DEST" remote get-url origin 2>/dev/null || true)"
+  case "$cur" in
+    https://*) ;;                          # only convert an HTTPS origin
+    "") warn "No 'origin' remote to switch."; return 0 ;;
+    *) return 0 ;;                         # already SSH (or something else)
+  esac
+
+  # Need a personal key for the SSH remote to authenticate. `*_personal` matches
+  # the secret key file itself, not its `.pub` counterpart.
+  shopt -s nullglob
+  local keys=( "$HOME"/.ssh/*_personal )
+  shopt -u nullglob
+  if (( ${#keys[@]} == 0 )); then
+    warn "No personal SSH key (~/.ssh/*_personal) yet — leaving origin on HTTPS. Switch later with:"
+    printf '     git -C %q remote set-url origin %s\n' "$DEST" "$SSH_URL"
+    return 0
+  fi
+
+  if git -C "$DEST" remote set-url origin "$SSH_URL"; then
+    say "Switched origin to SSH: ${SSH_URL}"
+  else
+    warn "Couldn't switch origin. Do it manually:"
+    printf '     git -C %q remote set-url origin %s\n' "$DEST" "$SSH_URL"
+  fi
+}
+
+main() {
+  need_git
+
+  if [ -d "$DEST/.git" ]; then
+    say "Repo already present at ${DEST} — updating…"
+    git -C "$DEST" pull --recurse-submodules --ff-only || warn "Pull failed; using the existing checkout."
+  else
+    mkdir -p "$(dirname "$DEST")"
+    clone_with_https || die "Clone failed."
+  fi
+
+  [ -f "$DEST/install.sh" ] || die "install.sh not found in ${DEST}."
+  say "Running install…"
+  # Forward args (e.g. --lean) through to install.sh.
+  ( cd "$DEST" && ./install.sh "$@" )
+
+  # Keys are restored by now — move origin off the HTTPS clone URL onto SSH.
+  switch_remote_to_ssh
+
+  say "Done. Open a new terminal (or 'exec zsh') to load your shell."
+}
+
+main "$@"
