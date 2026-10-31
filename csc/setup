@@ -47,8 +47,10 @@ _fetch() {
 }
 
 _say "Detected a POSIX shell - fetching the Unix installer..."
-# Pipe the Unix installer into a fresh sh, forwarding any args ("$@", e.g.
-# --lean) so `... | sh -s -- --lean` works.
-_fetch "${BASE_URL}/install-unix.sh" | sh -s -- "$@"
+# Pipe the Unix installer into bash (install-unix.sh requires bash for
+# 'set -o pipefail', $OSTYPE, etc.), falling back to sh if bash is unavailable.
+_runner="bash"
+if ! command -v bash >/dev/null 2>&1; then _runner="sh"; fi
+_fetch "${BASE_URL}/install-unix.sh" | "$_runner" -s -- "$@"
 exit $?
 #>
